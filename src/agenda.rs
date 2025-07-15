@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use comrak::Arena;
+pub(crate) use scroll::TodoWithContext;
 use scroll::{EdgeCasesPrompt, scroll_events};
 
 use crate::{notes::NotesCache, ui, vault::Vault};
@@ -20,9 +21,9 @@ pub(crate) fn agenda_screen(path: PathBuf) -> Result<()> {
 
     let prompt = EdgeCasesPrompt::default();
 
-    let view = scroll_events(&mut cache, &prompt, named, dated);
+    let view = scroll_events(&mut cache, &prompt, named, dated)?;
 
-    ui::show_agenda();
+    ui::show_agenda(view.iter_dated_todos(), view.iter_named_todos());
 
     cache.persist_notes()?;
 

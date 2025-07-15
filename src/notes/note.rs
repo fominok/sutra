@@ -174,6 +174,12 @@ pub(crate) struct Tag {
     nested_tags: Vec<String>,
 }
 
+impl Display for Tag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.nested_tags.join("/"))
+    }
+}
+
 impl Tag {
     pub(crate) fn join(mut self, other: Tag) -> Self {
         self.nested_tags.extend(other.nested_tags.into_iter());
@@ -501,6 +507,32 @@ impl<'a> Todo<'a> {
 
     pub(crate) fn is_removed(&self) -> bool {
         self.removed.get()
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.body().status == Status::Open
+    }
+
+    pub(crate) fn toggle_done(&self) {
+        let mut body = self.body_mut();
+        if body.status == Status::Open {
+            body.status = Status::Done
+        } else {
+            body.status = Status::Open
+        }
+    }
+
+    pub(crate) fn toggle_completed(&self) {
+        let mut body = self.body_mut();
+        if body.status == Status::Open {
+            body.status = Status::Completed
+        } else {
+            body.status = Status::Open
+        }
+    }
+
+    pub(crate) fn set_completed(&self) {
+        self.body_mut().status = Status::Completed;
     }
 
     pub(crate) fn update_ast(&self, arena: &'a Arena<AstNode<'a>>) {

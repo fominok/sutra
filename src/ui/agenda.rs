@@ -1,40 +1,91 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, iter};
 
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
+use itertools::Itertools;
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
-    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
-    layout::Rect,
+    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    layout::{Margin, Rect},
     style::Stylize,
     symbols::border,
-    text::{Line, Text},
-    widgets::{Block, Borders, Paragraph, ScrollbarState, StatefulWidget, Widget},
+    text::{Line, Span, Text, ToSpan, ToText},
+    widgets::{
+        Block, Borders, List, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, StatefulWidget, Widget,
+    },
 };
 
-use crate::TODAY;
+use crate::{TODAY, agenda::TodoWithContext, notes::TodoBody, vault::NamedFileIdentifier};
 
-pub(crate) fn show_agenda() {
+pub(crate) fn show_agenda<'v, 'a: 'v>(
+    dated_todos: impl DoubleEndedIterator<Item = (NaiveDate, TodoWithContext<'a, 'v>)>,
+    named_todos: impl Iterator<Item = (NamedFileIdentifier, TodoWithContext<'a, 'v>)>,
+) {
     let mut terminal = ratatui::init();
 
-    let result = App::new().run(&mut terminal);
+    let result = App::new(dated_todos, named_todos).run(&mut terminal);
 
     ratatui::restore();
 
     result.expect("TUI error");
 }
 
-struct App {
+type DatedTodos<'a, 'v> = BTreeMap<NaiveDate, Vec<TodoWithContext<'a, 'v>>>;
+
+type NamedTodos<'a, 'v> = BTreeMap<String, Vec<TodoWithContext<'a, 'v>>>;
+
+struct App<'a, 'v> {
     exit: bool,
-    counter: usize,
+    agenda_state: AgendaWidgetState,
+    dated_todos: DatedTodos<'a, 'v>,
+    named_todos: NamedTodos<'a, 'v>,
 }
 
-impl App {
-    fn new() -> Self {
+impl<'a, 'v> App<'a, 'v> {
+    fn new(
+        dated_todos_iter: impl DoubleEndedIterator<Item = (NaiveDate, TodoWithContext<'a, 'v>)>,
+        named_todos_iter: impl Iterator<Item = (NamedFileIdentifier, TodoWithContext<'a, 'v>)>,
+    ) -> Self {
+        let mut dated_todos: DatedTodos = Default::default();
+        let mut named_todos: NamedTodos = Default::default();
+
+        let mut today_idx = 0;
+        let mut dated_count = 0;
+
+        for (date, todos) in dated_todos_iter
+            .rev()
+            .filter(|(_, todo)| todo.todo.is_open())
+            .chunk_by(|(date, _)| *date)
+            .into_iter()
+        {
+            let todos_vec: Vec<_> = todos.map(|(_, todos)| todos).collect();
+
+            if date <= *TODAY {
+                today_idx = dated_count;
+            }
+
+            dated_count += todos_vec.len();
+
+            dated_todos.insert(date, todos_vec);
+        }
+
+        for (name, todos) in named_todos_iter
+            .filter(|(_, todo)| todo.todo.is_open())
+            .chunk_by(|(name, _)| name.to_string())
+            .into_iter()
+        {
+            let todos_vec: Vec<_> = todos.map(|(_, todos)| todos).collect();
+
+            named_todos.insert(name, todos_vec);
+        }
+
         App {
             exit: false,
-            counter: 0,
+            agenda_state: AgendaWidgetState::new(&dated_todos, &named_todos, today_idx),
+            dated_todos,
+            named_todos,
         }
     }
 
@@ -46,36 +97,7 @@ impl App {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
-        frame.render_widget(self, frame.area());
-    }
-
-    fn handle_events(&mut self) -> Result<()> {
-        match event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
-            }
-            _ => {}
-        };
-        Ok(())
-    }
-
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('q') => self.exit(),
-            _ => {}
-        }
-    }
-
-    fn exit(&mut self) {
-        self.exit = true;
-    }
-}
-
-impl Widget for &App {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+    fn draw(&mut self, frame: &mut Frame) {
         let title = Line::from(format!("{} {}", TODAY.format("%A, %B"), TODAY.day()));
         let instructions = Line::from(vec![
             "Up ".into(),
@@ -101,31 +123,252 @@ impl Widget for &App {
             .title_bottom(instructions.centered())
             .borders(Borders::TOP | Borders::BOTTOM);
 
-        Paragraph::new(Text::from("lol"))
-            .centered()
-            .block(block)
-            .render(area, buf);
+        let area = frame.area();
+        let buffer = frame.buffer_mut();
+
+        AgendaWidget::new(&self.dated_todos, &self.named_todos).render(
+            block.inner(area),
+            buffer,
+            &mut self.agenda_state,
+        );
+        block.render(area, buffer);
+    }
+
+    fn handle_events(&mut self) -> Result<()> {
+        match event::read()? {
+            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                self.handle_key_event(key_event)
+            }
+            _ => {}
+        };
+        Ok(())
+    }
+
+    fn get_selected_todo(&self) -> Option<&TodoWithContext<'a, 'v>> {
+        let idx = self.agenda_state.selected_idx;
+
+        self.dated_todos
+            .values()
+            .rev()
+            .chain(self.named_todos.values())
+            .flatten()
+            .nth(idx)
+    }
+
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('q'),
+                ..
+            } => self.exit(),
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self
+                .agenda_state
+                .select_next(&self.dated_todos, &self.named_todos),
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self
+                .agenda_state
+                .select_previous(&self.dated_todos, &self.named_todos),
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if let Some(todo) = self.get_selected_todo() {
+                    todo.todo.toggle_done();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if let Some(todo) = self.get_selected_todo() {
+                    todo.todo.toggle_completed();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn exit(&mut self) {
+        self.exit = true;
     }
 }
 
-struct AgendaWidget {
-    items: BTreeMap<NaiveDate, Vec<String>>,
+struct AgendaWidget<'a, 'v, 's> {
+    dated_todos: &'s DatedTodos<'a, 'v>,
+    named_todos: &'s NamedTodos<'a, 'v>,
+}
+
+impl<'a, 'v, 's> AgendaWidget<'a, 'v, 's> {
+    fn new(dated_todos: &'s DatedTodos<'a, 'v>, named_todos: &'s NamedTodos<'a, 'v>) -> Self {
+        Self {
+            dated_todos,
+            named_todos,
+        }
+    }
 }
 
 struct AgendaWidgetState {
-    line: usize,
+    list_state: ListState,
+    scroll_state: ScrollbarState,
+    selected_idx: usize,
+    last_idx: usize,
 }
 
-impl StatefulWidget for AgendaWidget {
+impl AgendaWidgetState {
+    fn new<'a, 'v>(
+        dated_todos: &DatedTodos<'a, 'v>,
+        named_todos: &NamedTodos<'a, 'v>,
+        selected_idx: usize,
+    ) -> Self {
+        let mut state = Self {
+            selected_idx,
+            list_state: Default::default(),
+            scroll_state: Default::default(),
+            last_idx: 0,
+        };
+
+        state.update_states(dated_todos, named_todos);
+
+        state
+    }
+
+    fn select_next<'a, 'v>(
+        &mut self,
+        dated_todos: &DatedTodos<'a, 'v>,
+        named_todos: &NamedTodos<'a, 'v>,
+    ) {
+        if self.selected_idx < self.last_idx {
+            self.selected_idx += 1;
+            self.update_states(dated_todos, named_todos);
+        }
+    }
+
+    fn select_previous<'a, 'v>(
+        &mut self,
+        dated_todos: &DatedTodos<'a, 'v>,
+        named_todos: &NamedTodos<'a, 'v>,
+    ) {
+        if self.selected_idx > 0 {
+            self.selected_idx -= 1;
+            self.update_states(dated_todos, named_todos);
+        }
+    }
+
+    fn update_states<'a, 'v>(
+        &mut self,
+        dated_todos: &DatedTodos<'a, 'v>,
+        named_todos: &NamedTodos<'a, 'v>,
+    ) {
+        // Compute line number from todo occurence index:
+        let mut last_idx = 0;
+        let mut skipped_idx = 0;
+        let mut list_lines_acc = 1; // Using 1 as 0 is taken by the first section name
+
+        let mut found = None;
+        for todos in dated_todos.values().rev().chain(named_todos.values()) {
+            let section_length = todos.len();
+            if found.is_none() && self.selected_idx < (skipped_idx + section_length) {
+                found = Some(list_lines_acc + self.selected_idx - skipped_idx);
+            }
+            if found.is_none() {
+                skipped_idx += section_length;
+            }
+
+            list_lines_acc += 2 + section_length; // 1 for separator, 1 for section name
+            last_idx += section_length;
+        }
+
+        if let Some(line) = found {
+            self.scroll_state = self
+                .scroll_state
+                .content_length(list_lines_acc - 1)
+                .position(line);
+            self.list_state.select(Some(line));
+        }
+
+        self.last_idx = last_idx - 1;
+    }
+}
+
+impl<'a, 'v, 's> StatefulWidget for AgendaWidget<'a, 'v, 's> {
     type State = AgendaWidgetState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        // let paragraph = Paragraph::new(items.clone())
-        //     .scroll((vertical_scroll as u16, 0))
-        //     .block(Block::new().borders(Borders::RIGHT)); // to show a background for the scrollbar
+        let list = List::new(
+            self.dated_todos
+                .iter()
+                .rev()
+                .flat_map(|(date, todos)| {
+                    iter::once(date.to_span().bold())
+                        .chain(todos.iter().map(|t| Span::raw(render_todo(t))))
+                        .chain(iter::once("\n".to_span()))
+                })
+                .chain(self.named_todos.iter().flat_map(|(name, todos)| {
+                    iter::once(name.to_span().bold()).chain(
+                        todos
+                            .iter()
+                            .map(|t| Span::raw(render_todo(t)))
+                            .chain(iter::once("\n".to_span())),
+                    )
+                })),
+        )
+        .scroll_padding(10)
+        .highlight_symbol(">>");
 
-        // let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        //     .begin_symbol(Some("↑"))
-        //     .end_symbol(Some("↓"));
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+
+        StatefulWidget::render(list, area, buf, &mut state.list_state);
+        scrollbar.render(area, buf, &mut state.scroll_state);
     }
+}
+
+fn render_todo(todo: &TodoWithContext) -> String {
+    let TodoBody {
+        title,
+        status,
+        delay,
+        advance,
+        every,
+        since,
+        adhoc,
+        statements,
+    }: &TodoBody = &todo.todo.body();
+
+    let tags_str = todo
+        .tags
+        .into_iter()
+        .flatten()
+        .map(|t| t.to_string())
+        .join(" ");
+
+    format!("[{}] {title} {tags_str}", status.as_char())
 }

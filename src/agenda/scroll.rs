@@ -18,7 +18,7 @@ use crate::{
     vault::{DatedFileIdentifier, FileIdentifier, NamedFileIdentifier},
 };
 
-const LOOK_AHEAD_TIMES: usize = 2;
+const LOOK_AHEAD_TIMES: usize = 1;
 
 const LOOK_AHEAD_INTERVAL: Interval = Interval {
     value: 2,
@@ -236,28 +236,27 @@ struct TodoDeclarationContext {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct TodoId(NaiveDate, String);
 
+pub(crate) struct TodoWithContext<'a, 'v> {
+    pub(crate) path: &'v [String],
+    pub(crate) tags: Option<&'v HashSet<Tag>>,
+    pub(crate) todo: &'v Todo<'a>,
+}
+
 impl<'a> EventsView<'a> {
-    pub(super) fn iter_named_todos(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            NamedFileIdentifier,
-            &[String],
-            Option<&HashSet<Tag>>,
-            &Todo<'a>,
-        ),
-    > {
+    pub(super) fn iter_named_todos<'v>(
+        &'v self,
+    ) -> impl Iterator<Item = (NamedFileIdentifier, TodoWithContext<'a, 'v>)> {
         self.named_todos.iter().flat_map(|(id, views)| {
             views.iter().flat_map(|view| {
                 view.iter()
-                    .map(|(path, tags, todo)| (id.clone(), path, tags, todo))
+                    .map(|(path, tags, todo)| (id.clone(), TodoWithContext { path, tags, todo }))
             })
         })
     }
 
-    pub(super) fn iter_dated_todos(
-        &self,
-    ) -> impl Iterator<Item = (NaiveDate, &[String], Option<&HashSet<Tag>>, &Todo<'a>)> {
+    pub(super) fn iter_dated_todos<'v>(
+        &'v self,
+    ) -> impl DoubleEndedIterator<Item = (NaiveDate, TodoWithContext<'a, 'v>)> {
         self.dated_todos.iter().flat_map(|(date, todos)| {
             todos.iter().map(|todo| {
                 let date = date.clone();
@@ -266,9 +265,11 @@ impl<'a> EventsView<'a> {
                 ); // TODO: Cow maybe
                 (
                     date,
-                    ctx.map(|c| c.path.as_slice()).unwrap_or_default(),
-                    ctx.and_then(|c| c.tags.as_ref()),
-                    *todo,
+                    TodoWithContext {
+                        path: ctx.map(|c| c.path.as_slice()).unwrap_or_default(),
+                        tags: ctx.and_then(|c| c.tags.as_ref()),
+                        todo: *todo,
+                    },
                 )
             })
         })
@@ -1718,7 +1719,7 @@ tags: #another #yetanother
 
         let mut iter = events_view.iter_dated_todos();
 
-        let (date, path, tags, todo) = iter.next().expect("expected todo");
+        let (date, TodoWithContext { path, tags, todo }) = iter.next().expect("expected todo");
         assert_eq!(date, start_date);
         assert_eq!(path, ["Todo", "Nested"]);
         assert_eq!(
@@ -1744,7 +1745,7 @@ tags: #another #yetanother
 
         // Next reccurence entry inherits original path and tags because those are lost
         // on automatic successor creation but can be useful for filtering the agenda
-        let (date, path, tags, todo) = iter.next().expect("expected todo");
+        let (date, TodoWithContext { path, tags, todo }) = iter.next().expect("expected todo");
         assert_eq!(date, add_interval(start_date, &interval));
         assert_eq!(path, ["Todo", "Nested"]);
         assert_eq!(
