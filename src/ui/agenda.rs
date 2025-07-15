@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, iter};
 
 use anyhow::Result;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, TimeDelta};
 use itertools::Itertools;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -17,7 +17,12 @@ use ratatui::{
     },
 };
 
-use crate::{TODAY, agenda::TodoWithContext, notes::TodoBody, vault::NamedFileIdentifier};
+use crate::{
+    TODAY,
+    agenda::TodoWithContext,
+    notes::{Interval, IntervalUnit, Todo, TodoBody},
+    vault::NamedFileIdentifier,
+};
 
 pub(crate) fn show_agenda<'v, 'a: 'v>(
     dated_todos: impl DoubleEndedIterator<Item = (NaiveDate, TodoWithContext<'a, 'v>)>,
@@ -38,6 +43,7 @@ type NamedTodos<'a, 'v> = BTreeMap<String, Vec<TodoWithContext<'a, 'v>>>;
 
 struct App<'a, 'v> {
     exit: bool,
+    grid_adjustment: bool,
     agenda_state: AgendaWidgetState,
     dated_todos: DatedTodos<'a, 'v>,
     named_todos: NamedTodos<'a, 'v>,
@@ -83,6 +89,7 @@ impl<'a, 'v> App<'a, 'v> {
 
         App {
             exit: false,
+            grid_adjustment: false,
             agenda_state: AgendaWidgetState::new(&dated_todos, &named_todos, today_idx),
             dated_todos,
             named_todos,
@@ -100,20 +107,12 @@ impl<'a, 'v> App<'a, 'v> {
     fn draw(&mut self, frame: &mut Frame) {
         let title = Line::from(format!("{} {}", TODAY.format("%A, %B"), TODAY.day()));
         let instructions = Line::from(vec![
-            "Up ".into(),
-            "↑ /k/<C-p>".blue().bold(),
+            "Help ".into(),
+            "?".blue().bold(),
             " | ".bold(),
-            "Down ".into(),
-            "↓ /j/<C-n>".blue().bold(),
-            " | ".bold(),
-            "Done ".into(),
-            "<Space>".blue().bold(),
-            " | ".bold(),
-            "Skip ".into(),
-            "s".blue().bold(),
-            " | ".bold(),
-            "Complete recurrence ".into(),
-            "c".blue().bold(),
+            format!("[{}] ", self.grid_adjustment.then_some('x').unwrap_or(' ')).green(),
+            "Grid adjustment ".into(),
+            "g".blue().bold(),
             " | ".bold(),
             "Quit ".into(),
             "q ".blue().bold(),
@@ -202,6 +201,11 @@ impl<'a, 'v> App<'a, 'v> {
             } => {
                 if let Some(todo) = self.get_selected_todo() {
                     todo.todo.toggle_done();
+                    if self.grid_adjustment {
+                        if let Some(date) = todo.date {
+                            adjust_todo(date, todo.todo);
+                        }
+                    }
                 }
             }
             KeyEvent {
@@ -212,6 +216,13 @@ impl<'a, 'v> App<'a, 'v> {
                 if let Some(todo) = self.get_selected_todo() {
                     todo.todo.toggle_completed();
                 }
+            }
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.grid_adjustment = !self.grid_adjustment;
             }
             _ => {}
         }
@@ -370,5 +381,38 @@ fn render_todo(todo: &TodoWithContext) -> String {
         .map(|t| t.to_string())
         .join(" ");
 
-    format!("[{}] {title} {tags_str}", status.as_char())
+    let adjustment_str = if let Some(delay) = delay {
+        format!("(delay {delay})")
+    } else if let Some(advance) = advance {
+        format!("(advance {advance})")
+    } else {
+        "".to_string()
+    };
+
+    format!(
+        " [{}] {title} {tags_str} {adjustment_str}",
+        status.as_char()
+    )
+}
+
+fn adjust_todo(todo_date: NaiveDate, todo: &Todo) {
+    if todo.is_open() {
+        todo.set_advance(None);
+        todo.set_delay(None);
+    } else {
+        let delta = (todo_date - *TODAY).num_days();
+        if delta.is_positive() {
+            // Done in advance
+            todo.set_advance(Some(Interval {
+                value: delta as u32,
+                unit: IntervalUnit::Day,
+            }));
+        } else {
+            // Done with delay
+            todo.set_delay(Some(Interval {
+                value: (-delta) as u32,
+                unit: IntervalUnit::Day,
+            }));
+        }
+    }
 }

@@ -518,7 +518,7 @@ impl<'a> Todo<'a> {
         if body.status == Status::Open {
             body.status = Status::Done
         } else {
-            body.status = Status::Open
+            body.status = Status::Open;
         }
     }
 
@@ -527,12 +527,8 @@ impl<'a> Todo<'a> {
         if body.status == Status::Open {
             body.status = Status::Completed
         } else {
-            body.status = Status::Open
+            body.status = Status::Open;
         }
-    }
-
-    pub(crate) fn set_completed(&self) {
-        self.body_mut().status = Status::Completed;
     }
 
     pub(crate) fn update_ast(&self, arena: &'a Arena<AstNode<'a>>) {

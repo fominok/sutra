@@ -237,6 +237,7 @@ struct TodoDeclarationContext {
 struct TodoId(NaiveDate, String);
 
 pub(crate) struct TodoWithContext<'a, 'v> {
+    pub(crate) date: Option<NaiveDate>,
     pub(crate) path: &'v [String],
     pub(crate) tags: Option<&'v HashSet<Tag>>,
     pub(crate) todo: &'v Todo<'a>,
@@ -248,8 +249,17 @@ impl<'a> EventsView<'a> {
     ) -> impl Iterator<Item = (NamedFileIdentifier, TodoWithContext<'a, 'v>)> {
         self.named_todos.iter().flat_map(|(id, views)| {
             views.iter().flat_map(|view| {
-                view.iter()
-                    .map(|(path, tags, todo)| (id.clone(), TodoWithContext { path, tags, todo }))
+                view.iter().map(|(path, tags, todo)| {
+                    (
+                        id.clone(),
+                        TodoWithContext {
+                            path,
+                            tags,
+                            todo,
+                            date: None,
+                        },
+                    )
+                })
             })
         })
     }
@@ -269,6 +279,7 @@ impl<'a> EventsView<'a> {
                         path: ctx.map(|c| c.path.as_slice()).unwrap_or_default(),
                         tags: ctx.and_then(|c| c.tags.as_ref()),
                         todo: *todo,
+                        date: Some(date),
                     },
                 )
             })
@@ -1719,7 +1730,12 @@ tags: #another #yetanother
 
         let mut iter = events_view.iter_dated_todos();
 
-        let (date, TodoWithContext { path, tags, todo }) = iter.next().expect("expected todo");
+        let (
+            date,
+            TodoWithContext {
+                path, tags, todo, ..
+            },
+        ) = iter.next().expect("expected todo");
         assert_eq!(date, start_date);
         assert_eq!(path, ["Todo", "Nested"]);
         assert_eq!(
@@ -1745,7 +1761,12 @@ tags: #another #yetanother
 
         // Next reccurence entry inherits original path and tags because those are lost
         // on automatic successor creation but can be useful for filtering the agenda
-        let (date, TodoWithContext { path, tags, todo }) = iter.next().expect("expected todo");
+        let (
+            date,
+            TodoWithContext {
+                path, tags, todo, ..
+            },
+        ) = iter.next().expect("expected todo");
         assert_eq!(date, add_interval(start_date, &interval));
         assert_eq!(path, ["Todo", "Nested"]);
         assert_eq!(
