@@ -9,7 +9,7 @@ use comrak::{Arena, nodes::AstNode};
 use super::{Todo, note::Note};
 use crate::{
     md,
-    vault::{FileIdentifier, Vault},
+    vault::{NoteIdentifier, Vault},
 };
 
 /// In-memory storage of processed notes that are possibly uncommitted.
@@ -17,7 +17,7 @@ pub(crate) struct NotesCache<'a> {
     md_arena: &'a Arena<AstNode<'a>>,
     notes_arena: &'a Arena<RefCell<Note<'a>>>,
     todos_arena: &'a Arena<Todo<'a>>,
-    notes_index: HashMap<FileIdentifier, &'a RefCell<Note<'a>>>,
+    notes_index: HashMap<NoteIdentifier, &'a RefCell<Note<'a>>>,
     vault: &'a Vault,
 }
 
@@ -53,7 +53,7 @@ impl<'a> NotesCache<'a> {
         Ok(())
     }
 
-    pub(crate) fn get_note(&mut self, id: FileIdentifier) -> Result<&'a RefCell<Note<'a>>> {
+    pub(crate) fn get_note(&mut self, id: NoteIdentifier) -> Result<&'a RefCell<Note<'a>>> {
         match self.notes_index.entry(id) {
             Entry::Occupied(entry) => Ok(entry.into_mut()),
             Entry::Vacant(entry) => {

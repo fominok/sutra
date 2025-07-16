@@ -38,7 +38,7 @@ impl Vault {
         let mut dated = Vec::new();
 
         for id in glob_notes(&self.path, GlobPattern::All)
-            .map(|r| r.and_then(FileIdentifier::strip_from_path))
+            .map(|r| r.and_then(NoteIdentifier::strip_from_path))
         {
             let id = id?;
             match id.0 {
@@ -56,13 +56,13 @@ impl Vault {
         month: Month,
     ) -> impl Iterator<Item = Result<DatedFileIdentifier>> {
         glob_notes(&self.path, GlobPattern::Month(month)).filter_map(|r| {
-            r.and_then(FileIdentifier::strip_from_path)
+            r.and_then(NoteIdentifier::strip_from_path)
                 .map(|id| id.into_dated())
                 .transpose()
         })
     }
 
-    pub(crate) fn write(&self, id: &FileIdentifier, data: &[u8]) -> Result<()> {
+    pub(crate) fn write(&self, id: &NoteIdentifier, data: &[u8]) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -74,7 +74,7 @@ impl Vault {
         Ok(())
     }
 
-    pub(crate) fn read_string(&self, id: &FileIdentifier) -> Result<String> {
+    pub(crate) fn read_string(&self, id: &NoteIdentifier) -> Result<String> {
         let path = id.to_path(self);
         if path.is_file() {
             fs::read_to_string(path).context("unable to read file contents")
@@ -123,9 +123,9 @@ fn glob_notes(path: &Path, pattern: GlobPattern) -> impl Iterator<Item = Result<
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct FileIdentifier(FileIdentifierVariant);
+pub(crate) struct NoteIdentifier(FileIdentifierVariant);
 
-impl FileIdentifier {
+impl NoteIdentifier {
     pub(crate) fn new_named(name: String) -> Self {
         Self(
             if let Some(date) = NaiveDate::parse_from_str(&name, DATE_FMT).ok() {
@@ -157,7 +157,7 @@ impl FileIdentifier {
     }
 
     fn strip_from_path(path: PathBuf) -> Result<Self> {
-        Ok(FileIdentifier::new_named(
+        Ok(NoteIdentifier::new_named(
             path.file_stem()
                 .context("bad file name")?
                 .to_string_lossy()
@@ -166,13 +166,13 @@ impl FileIdentifier {
     }
 }
 
-impl PartialOrd for FileIdentifier {
+impl PartialOrd for NoteIdentifier {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.0.partial_cmp(&other.0)
     }
 }
 
-impl Ord for FileIdentifier {
+impl Ord for NoteIdentifier {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.partial_cmp(other).expect("total order")
     }
@@ -184,9 +184,16 @@ pub(crate) enum FileIdentifierVariant {
     Dated(DatedFileIdentifier),
 }
 
-impl FileIdentifier {
+impl NoteIdentifier {
     pub(crate) fn into_dated(self) -> Option<DatedFileIdentifier> {
         match self.0 {
+            FileIdentifierVariant::Named(_) => None,
+            FileIdentifierVariant::Dated(id) => Some(id),
+        }
+    }
+
+    pub(crate) fn as_dated(&self) -> Option<&DatedFileIdentifier> {
+        match &self.0 {
             FileIdentifierVariant::Named(_) => None,
             FileIdentifierVariant::Dated(id) => Some(id),
         }
@@ -198,10 +205,17 @@ impl FileIdentifier {
             FileIdentifierVariant::Dated(_) => None,
         }
     }
+
+    pub(crate) fn as_named(&self) -> Option<&NamedFileIdentifier> {
+        match &self.0 {
+            FileIdentifierVariant::Named(id) => Some(id),
+            FileIdentifierVariant::Dated(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct NamedFileIdentifier(String);
+pub(crate) struct NamedFileIdentifier(pub(crate) String);
 
 impl Display for NamedFileIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -209,7 +223,7 @@ impl Display for NamedFileIdentifier {
     }
 }
 
-impl From<NamedFileIdentifier> for FileIdentifier {
+impl From<NamedFileIdentifier> for NoteIdentifier {
     fn from(value: NamedFileIdentifier) -> Self {
         Self(FileIdentifierVariant::Named(value))
     }
@@ -218,7 +232,7 @@ impl From<NamedFileIdentifier> for FileIdentifier {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DatedFileIdentifier(pub(crate) NaiveDate);
 
-impl From<DatedFileIdentifier> for FileIdentifier {
+impl From<DatedFileIdentifier> for NoteIdentifier {
     fn from(value: DatedFileIdentifier) -> Self {
         Self(FileIdentifierVariant::Dated(value))
     }

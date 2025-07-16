@@ -15,7 +15,7 @@ use crate::{
         TodoBodyBuilder,
     },
     ui::prompt::{self, PromptSelect},
-    vault::{DatedFileIdentifier, FileIdentifier, NamedFileIdentifier},
+    vault::{DatedFileIdentifier, NamedFileIdentifier, NoteIdentifier},
 };
 
 const LOOK_AHEAD_TIMES: usize = 1;
@@ -237,28 +237,21 @@ struct TodoDeclarationContext {
 struct TodoId(NaiveDate, String);
 
 pub(crate) struct TodoWithContext<'a, 'v> {
-    pub(crate) date: Option<NaiveDate>,
+    pub(crate) note_id: NoteIdentifier,
     pub(crate) path: &'v [String],
     pub(crate) tags: Option<&'v HashSet<Tag>>,
     pub(crate) todo: &'v Todo<'a>,
 }
 
 impl<'a> EventsView<'a> {
-    pub(super) fn iter_named_todos<'v>(
-        &'v self,
-    ) -> impl Iterator<Item = (NamedFileIdentifier, TodoWithContext<'a, 'v>)> {
+    pub(super) fn iter_named_todos<'v>(&'v self) -> impl Iterator<Item = TodoWithContext<'a, 'v>> {
         self.named_todos.iter().flat_map(|(id, views)| {
             views.iter().flat_map(|view| {
-                view.iter().map(|(path, tags, todo)| {
-                    (
-                        id.clone(),
-                        TodoWithContext {
-                            path,
-                            tags,
-                            todo,
-                            date: None,
-                        },
-                    )
+                view.iter().map(|(path, tags, todo)| TodoWithContext {
+                    path,
+                    tags,
+                    todo,
+                    note_id: id.clone().into(),
                 })
             })
         })
@@ -266,22 +259,19 @@ impl<'a> EventsView<'a> {
 
     pub(super) fn iter_dated_todos<'v>(
         &'v self,
-    ) -> impl DoubleEndedIterator<Item = (NaiveDate, TodoWithContext<'a, 'v>)> {
+    ) -> impl DoubleEndedIterator<Item = TodoWithContext<'a, 'v>> {
         self.dated_todos.iter().flat_map(|(date, todos)| {
             todos.iter().map(|todo| {
                 let date = date.clone();
                 let ctx: Option<&TodoDeclarationContext> = self.dated_declaration_contexts.get(
                     &TodoId(todo.body().since.unwrap_or(date), todo.title().to_owned()),
                 ); // TODO: Cow maybe
-                (
-                    date,
-                    TodoWithContext {
-                        path: ctx.map(|c| c.path.as_slice()).unwrap_or_default(),
-                        tags: ctx.and_then(|c| c.tags.as_ref()),
-                        todo: *todo,
-                        date: Some(date),
-                    },
-                )
+                TodoWithContext {
+                    path: ctx.map(|c| c.path.as_slice()).unwrap_or_default(),
+                    tags: ctx.and_then(|c| c.tags.as_ref()),
+                    todo: *todo,
+                    note_id: NoteIdentifier::new_dated(date),
+                }
             })
         })
     }
@@ -500,7 +490,7 @@ impl<'a> EventsView<'a> {
                 // Start scrolling through one recurrence series.
                 // The algorithm goes from start date until reaching completion mark or reaching
                 // the limit of incompleted occurences in future or looking too far into the
-                // future, the latter two is a subject for configuration.
+                // future, the latter two is a subject for configuration (todo).
                 let mut completed = false;
 
                 while !completed && stats.times_ahead_left > 0 && &stats.next_date <= scroll_until {
@@ -593,7 +583,7 @@ impl<'a> EventsView<'a> {
                                 stats.times_ahead_left -= 1;
                             }
 
-                            let note = cache.get_note(FileIdentifier::new_dated(
+                            let note = cache.get_note(NoteIdentifier::new_dated(
                                 current_processing_date.into(),
                             ))?;
                             let mut note_ref = note.borrow_mut();
@@ -831,7 +821,7 @@ mod tests {
     use super::*;
     use crate::{
         notes::Status,
-        vault::{FileIdentifier, Vault},
+        vault::{NoteIdentifier, Vault},
     };
 
     struct TestContext<'a> {
@@ -854,7 +844,7 @@ mod tests {
             }
         }
 
-        fn add_note(&self, id: &FileIdentifier, data: &str) {
+        fn add_note(&self, id: &NoteIdentifier, data: &str) {
             self.vault
                 .write(id, data.as_bytes())
                 .expect("cannot add note");
@@ -878,7 +868,7 @@ mod tests {
         let ctx = TestContext::new();
         let mut cache = make_cache!(ctx);
 
-        let id = FileIdentifier::new_named("test".to_owned());
+        let id = NoteIdentifier::new_named("test".to_owned());
 
         ctx.add_note(&id, data);
 
@@ -964,7 +954,7 @@ Some content
         let ctx = TestContext::new();
         let mut cache = make_cache!(ctx);
 
-        let id = FileIdentifier::new_named("test".to_owned());
+        let id = NoteIdentifier::new_named("test".to_owned());
 
         ctx.add_note(
             &id,
@@ -1021,7 +1011,7 @@ Some content
         let ctx = TestContext::new();
         let mut cache = make_cache!(ctx);
 
-        let id = FileIdentifier::new_named("2020-02-02".to_owned());
+        let id = NoteIdentifier::new_named("2020-02-02".to_owned());
 
         ctx.add_note(
             &id,
@@ -1086,7 +1076,7 @@ Some content
         let ctx = TestContext::new();
         let mut cache = make_cache!(ctx);
 
-        let id = FileIdentifier::new_named("2020-02-02".to_owned());
+        let id = NoteIdentifier::new_named("2020-02-02".to_owned());
 
         ctx.add_note(
             &id,
@@ -1106,7 +1096,7 @@ Some content
 
         let next_date = NaiveDate::from_ymd_opt(2020, 5, 2).expect("expected a date");
         ctx.add_note(
-            &FileIdentifier::new_dated(next_date),
+            &NoteIdentifier::new_dated(next_date),
             "
 # Todo
 
@@ -1139,7 +1129,7 @@ Some content
         let mut cache = make_cache!(ctx);
 
         let start_date = NaiveDate::from_ymd_opt(2020, 2, 2).expect("expected a valid date");
-        let id = FileIdentifier::new_dated(start_date);
+        let id = NoteIdentifier::new_dated(start_date);
 
         ctx.add_note(
             &id,
@@ -1158,7 +1148,7 @@ Some content
         );
 
         ctx.add_note(
-            &FileIdentifier::new_dated(next_date),
+            &NoteIdentifier::new_dated(next_date),
             "
 # Todo
 
@@ -1214,7 +1204,7 @@ Some content
         let mut cache = make_cache!(ctx);
 
         let start_date = NaiveDate::from_ymd_opt(2020, 2, 2).expect("expected a valid date");
-        let id = FileIdentifier::new_dated(start_date);
+        let id = NoteIdentifier::new_dated(start_date);
 
         ctx.add_note(
             &id,
@@ -1233,7 +1223,7 @@ Some content
         );
 
         ctx.add_note(
-            &FileIdentifier::new_dated(next_date),
+            &NoteIdentifier::new_dated(next_date),
             "
 # Todo
 
@@ -1289,7 +1279,7 @@ Some content
         let mut cache = make_cache!(ctx);
 
         let start_date = NaiveDate::from_ymd_opt(2020, 2, 2).expect("expected a valid date");
-        let id = FileIdentifier::new_dated(start_date);
+        let id = NoteIdentifier::new_dated(start_date);
 
         ctx.add_note(
             &id,
@@ -1308,7 +1298,7 @@ Some content
         );
 
         ctx.add_note(
-            &FileIdentifier::new_dated(next_date),
+            &NoteIdentifier::new_dated(next_date),
             "
 # Todo
 
@@ -1364,7 +1354,7 @@ Some content
         let start_date = NaiveDate::from_ymd_opt(2020, 2, 2).expect("expected a valid date");
         let next_date = add_interval(start_date, &interval);
 
-        let id = FileIdentifier::new_dated(start_date);
+        let id = NoteIdentifier::new_dated(start_date);
 
         ctx.add_note(
             &id,
@@ -1383,7 +1373,7 @@ Some content
         );
 
         ctx.add_note(
-            &FileIdentifier::new_dated(next_date),
+            &NoteIdentifier::new_dated(next_date),
             "
 # Todo
 
@@ -1446,7 +1436,7 @@ Some content
         let ctx = TestContext::new();
         let mut cache = make_cache!(ctx);
 
-        let id = FileIdentifier::new_dated(start_date);
+        let id = NoteIdentifier::new_dated(start_date);
 
         ctx.add_note(
             &id,
@@ -1465,7 +1455,7 @@ Some content
         // Starting over with previously persisted data
         let mut cache = make_cache!(ctx);
 
-        let id = FileIdentifier::new_dated(delay_date);
+        let id = NoteIdentifier::new_dated(delay_date);
 
         ctx.add_note(
             &id,
@@ -1481,7 +1471,7 @@ Some content
         // shall stay at the old place
         let adhoc_date = add_interval(delay_date, &interval);
 
-        let id = FileIdentifier::new_dated(adhoc_date);
+        let id = NoteIdentifier::new_dated(adhoc_date);
 
         ctx.add_note(
             &id,
@@ -1606,7 +1596,7 @@ Some content
         };
 
         ctx.add_note(
-            &FileIdentifier::new_dated(first_start_date),
+            &NoteIdentifier::new_dated(first_start_date),
             "
 # Todo
 
@@ -1622,7 +1612,7 @@ Some content
         );
 
         ctx.add_note(
-            &FileIdentifier::new_dated(end_date),
+            &NoteIdentifier::new_dated(end_date),
             "
 # Todo
 
@@ -1630,7 +1620,7 @@ Some content
         );
 
         ctx.add_note(
-            &FileIdentifier::new_dated(next_start_date),
+            &NoteIdentifier::new_dated(next_start_date),
             "
 # Todo
 
@@ -1707,7 +1697,7 @@ Some content
         let start_date = NaiveDate::from_ymd_opt(2020, 2, 2).expect("expected a valid date");
 
         ctx.add_note(
-            &FileIdentifier::new_dated(start_date),
+            &NoteIdentifier::new_dated(start_date),
             "
 # Todo
 
@@ -1730,12 +1720,13 @@ tags: #another #yetanother
 
         let mut iter = events_view.iter_dated_todos();
 
-        let (
-            date,
-            TodoWithContext {
-                path, tags, todo, ..
-            },
-        ) = iter.next().expect("expected todo");
+        let TodoWithContext {
+            path,
+            tags,
+            todo,
+            note_id,
+        } = iter.next().expect("expected todo");
+        let date = note_id.into_dated().unwrap().0;
         assert_eq!(date, start_date);
         assert_eq!(path, ["Todo", "Nested"]);
         assert_eq!(
@@ -1761,12 +1752,13 @@ tags: #another #yetanother
 
         // Next reccurence entry inherits original path and tags because those are lost
         // on automatic successor creation but can be useful for filtering the agenda
-        let (
-            date,
-            TodoWithContext {
-                path, tags, todo, ..
-            },
-        ) = iter.next().expect("expected todo");
+        let TodoWithContext {
+            path,
+            tags,
+            todo,
+            note_id,
+        } = iter.next().expect("expected todo");
+        let date = note_id.into_dated().unwrap().0;
         assert_eq!(date, add_interval(start_date, &interval));
         assert_eq!(path, ["Todo", "Nested"]);
         assert_eq!(

@@ -7,12 +7,12 @@ use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    layout::{Margin, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::Stylize,
     symbols::border,
     text::{Line, Span, Text, ToSpan, ToText},
     widgets::{
-        Block, Borders, List, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        Block, Borders, Clear, List, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState, StatefulWidget, Widget,
     },
 };
@@ -25,8 +25,8 @@ use crate::{
 };
 
 pub(crate) fn show_agenda<'v, 'a: 'v>(
-    dated_todos: impl DoubleEndedIterator<Item = (NaiveDate, TodoWithContext<'a, 'v>)>,
-    named_todos: impl Iterator<Item = (NamedFileIdentifier, TodoWithContext<'a, 'v>)>,
+    dated_todos: impl DoubleEndedIterator<Item = TodoWithContext<'a, 'v>>,
+    named_todos: impl Iterator<Item = TodoWithContext<'a, 'v>>,
 ) {
     let mut terminal = ratatui::init();
 
@@ -44,6 +44,7 @@ type NamedTodos<'a, 'v> = BTreeMap<String, Vec<TodoWithContext<'a, 'v>>>;
 struct App<'a, 'v> {
     exit: bool,
     grid_adjustment: bool,
+    show_help: bool,
     agenda_state: AgendaWidgetState,
     dated_todos: DatedTodos<'a, 'v>,
     named_todos: NamedTodos<'a, 'v>,
@@ -51,8 +52,8 @@ struct App<'a, 'v> {
 
 impl<'a, 'v> App<'a, 'v> {
     fn new(
-        dated_todos_iter: impl DoubleEndedIterator<Item = (NaiveDate, TodoWithContext<'a, 'v>)>,
-        named_todos_iter: impl Iterator<Item = (NamedFileIdentifier, TodoWithContext<'a, 'v>)>,
+        dated_todos_iter: impl DoubleEndedIterator<Item = TodoWithContext<'a, 'v>>,
+        named_todos_iter: impl Iterator<Item = TodoWithContext<'a, 'v>>,
     ) -> Self {
         let mut dated_todos: DatedTodos = Default::default();
         let mut named_todos: NamedTodos = Default::default();
@@ -62,7 +63,10 @@ impl<'a, 'v> App<'a, 'v> {
 
         for (date, todos) in dated_todos_iter
             .rev()
-            .filter(|(_, todo)| todo.todo.is_open())
+            .filter_map(|todo| match todo.note_id.as_dated() {
+                Some(date) if todo.todo.is_open() => Some((date.0, todo)),
+                _ => None,
+            })
             .chunk_by(|(date, _)| *date)
             .into_iter()
         {
@@ -78,18 +82,22 @@ impl<'a, 'v> App<'a, 'v> {
         }
 
         for (name, todos) in named_todos_iter
-            .filter(|(_, todo)| todo.todo.is_open())
-            .chunk_by(|(name, _)| name.to_string())
+            .filter_map(|todo| match todo.note_id.as_named() {
+                Some(name) if todo.todo.is_open() => Some((name.0.clone(), todo)),
+                _ => None,
+            })
+            .chunk_by(|(name, _)| name.clone())
             .into_iter()
         {
             let todos_vec: Vec<_> = todos.map(|(_, todos)| todos).collect();
 
-            named_todos.insert(name, todos_vec);
+            named_todos.insert(name.clone(), todos_vec);
         }
 
         App {
             exit: false,
             grid_adjustment: false,
+            show_help: false,
             agenda_state: AgendaWidgetState::new(&dated_todos, &named_todos, today_idx),
             dated_todos,
             named_todos,
@@ -108,7 +116,7 @@ impl<'a, 'v> App<'a, 'v> {
         let title = Line::from(format!("{} {}", TODAY.format("%A, %B"), TODAY.day()));
         let instructions = Line::from(vec![
             "Help ".into(),
-            "?".blue().bold(),
+            "h".blue().bold(),
             " | ".bold(),
             format!("[{}] ", self.grid_adjustment.then_some('x').unwrap_or(' ')).green(),
             "Grid adjustment ".into(),
@@ -131,6 +139,13 @@ impl<'a, 'v> App<'a, 'v> {
             &mut self.agenda_state,
         );
         block.render(area, buffer);
+
+        if self.show_help {
+            let block = Block::bordered().title("Help");
+            let area = popup_area(area, 90, 80);
+            frame.render_widget(Clear, area);
+            frame.render_widget(block, area);
+        }
     }
 
     fn handle_events(&mut self) -> Result<()> {
@@ -155,76 +170,87 @@ impl<'a, 'v> App<'a, 'v> {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event {
-            KeyEvent {
-                code: KeyCode::Char('q'),
-                ..
-            } => self.exit(),
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => self
-                .agenda_state
-                .select_next(&self.dated_todos, &self.named_todos),
-            KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => self
-                .agenda_state
-                .select_previous(&self.dated_todos, &self.named_todos),
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                if let Some(todo) = self.get_selected_todo() {
-                    todo.todo.toggle_done();
-                    if self.grid_adjustment {
-                        if let Some(date) = todo.date {
-                            adjust_todo(date, todo.todo);
+        if !self.show_help {
+            match key_event {
+                KeyEvent {
+                    code: KeyCode::Char('q'),
+                    ..
+                } => self.exit(),
+                KeyEvent {
+                    code: KeyCode::Char('j'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Down,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Char('n'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                } => self
+                    .agenda_state
+                    .select_next(&self.dated_todos, &self.named_todos),
+                KeyEvent {
+                    code: KeyCode::Char('k'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Up,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Char('p'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                } => self
+                    .agenda_state
+                    .select_previous(&self.dated_todos, &self.named_todos),
+                KeyEvent {
+                    code: KeyCode::Char(' '),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    if let Some(todo) = self.get_selected_todo() {
+                        todo.todo.toggle_done();
+                        if self.grid_adjustment {
+                            if let Some(date) = todo.note_id.as_dated() {
+                                adjust_todo(date.0, todo.todo);
+                            }
                         }
                     }
                 }
-            }
-            KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                if let Some(todo) = self.get_selected_todo() {
-                    todo.todo.toggle_completed();
+                KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    if let Some(todo) = self.get_selected_todo() {
+                        todo.todo.toggle_completed();
+                    }
                 }
+                KeyEvent {
+                    code: KeyCode::Char('g'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    self.grid_adjustment = !self.grid_adjustment;
+                }
+                KeyEvent {
+                    code: KeyCode::Char('h'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    self.show_help = true;
+                }
+                _ => {}
             }
-            KeyEvent {
-                code: KeyCode::Char('g'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.grid_adjustment = !self.grid_adjustment;
-            }
-            _ => {}
+        } else {
+            self.show_help = false;
         }
     }
 
@@ -393,6 +419,14 @@ fn render_todo(todo: &TodoWithContext) -> String {
         " [{}] {title} {tags_str} {adjustment_str}",
         status.as_char()
     )
+}
+
+fn popup_area(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
+    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
+    let [area] = vertical.areas(area);
+    let [area] = horizontal.areas(area);
+    area
 }
 
 fn adjust_todo(todo_date: NaiveDate, todo: &Todo) {
