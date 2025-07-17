@@ -398,14 +398,10 @@ fn render_todo(todo: &TodoWithContext) -> String {
         since,
         adhoc,
         statements,
+        ..
     }: &TodoBody = &todo.todo.body();
 
-    let tags_str = todo
-        .tags
-        .into_iter()
-        .flatten()
-        .map(|t| t.to_string())
-        .join(" ");
+    let tags_str = todo.tags_lock().iter().map(|t| t.to_string()).join(" ");
 
     let adjustment_str = if let Some(delay) = delay {
         format!("(delay {delay})")

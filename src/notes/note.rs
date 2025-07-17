@@ -428,6 +428,8 @@ pub(crate) struct TodoBody {
     pub(crate) adhoc: bool,
     #[builder(setter(skip))]
     pub(crate) statements: Option<Vec<StatementBody>>,
+    #[builder(setter(skip))]
+    pub(crate) tags: Option<HashSet<Tag>>,
 }
 
 impl TodoBody {

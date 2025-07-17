@@ -2,7 +2,6 @@ use std::cell::RefCell;
 
 use chrono::NaiveDate;
 use comrak::nodes::{AstNode, NodeValue};
-use log::warn;
 use nom::{
     IResult, Parser,
     bytes::{
@@ -11,13 +10,18 @@ use nom::{
     },
     character::complete::{multispace0, multispace1, u32},
     combinator::{map, map_res, opt},
-    multi::separated_list0,
+    multi::{many1, separated_list0},
     sequence::pair,
 };
+use tracing::warn;
 
 use super::Todo;
-use crate::notes::note::{
-    Interval, IntervalUnit, StatementBody, Status, TodoBody, parse::common::parse_symbol,
+use crate::notes::{
+    Tag,
+    note::{
+        Interval, IntervalUnit, StatementBody, Status, TodoBody,
+        parse::{common::parse_symbol, tags::parse_tag},
+    },
 };
 
 pub(super) fn parse_todo<'a>(node: &'a AstNode<'a>) -> Option<Todo<'a>> {
@@ -46,6 +50,7 @@ pub(super) fn parse_todo<'a>(node: &'a AstNode<'a>) -> Option<Todo<'a>> {
             since: None,
             adhoc: false,
             statements: None,
+            tags: None,
         };
 
         for param in params.into_iter().flatten() {
@@ -61,6 +66,11 @@ pub(super) fn parse_todo<'a>(node: &'a AstNode<'a>) -> Option<Todo<'a>> {
 
                     if let Some(statements) = &mut todo_body.statements {
                         statements.push(s);
+                    }
+                }
+                Param::Tags(tags) => {
+                    if !tags.is_empty() {
+                        todo_body.tags = Some(tags.into_iter().collect());
                     }
                 }
                 Param::Adhoc => todo_body.adhoc = true,
@@ -100,6 +110,7 @@ enum Param {
     Every(Interval),
     Since(NaiveDate),
     Statement(StatementBody),
+    Tags(Vec<Tag>),
     Adhoc,
 }
 
@@ -133,6 +144,10 @@ fn parse_param(input: &str) -> IResult<&str, Param> {
     .or(map(
         (tag("since"), multispace1, parse_date),
         |(_, _, date)| Param::Since(date),
+    ))
+    .or(map(
+        (tag("tags"), multispace1, many1(parse_tag)),
+        |(_, _, tags)| Param::Tags(tags),
     ))
     .or(map(parse_statement, Param::Statement));
 

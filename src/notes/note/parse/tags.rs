@@ -40,7 +40,7 @@ pub(super) fn parse_tags<'a>(node: &'a AstNode<'a>) -> Option<Tags<'a>> {
     None
 }
 
-fn parse_tag(input: &str) -> IResult<&str, Tag> {
+pub(super) fn parse_tag(input: &str) -> IResult<&str, Tag> {
     map(
         (
             tag("#"),

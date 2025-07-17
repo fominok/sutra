@@ -1,4 +1,5 @@
 use std::{
+    cell::Ref,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     iter,
 };
@@ -243,6 +244,31 @@ pub(crate) struct TodoWithContext<'a, 'v> {
     pub(crate) todo: &'v Todo<'a>,
 }
 
+impl<'a, 'v> TodoWithContext<'a, 'v> {
+    pub(crate) fn tags_lock(&self) -> TagsLock<'v> {
+        TagsLock {
+            tags: self.tags,
+            todo: self.todo.body(),
+        }
+    }
+}
+
+pub(crate) struct TagsLock<'a> {
+    tags: Option<&'a HashSet<Tag>>,
+    todo: Ref<'a, TodoBody>,
+}
+
+impl<'a> TagsLock<'a> {
+    pub(crate) fn iter<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Tag> + 's> {
+        match (&self.todo.tags, self.tags) {
+            (None, None) => Box::new(iter::empty()),
+            (None, Some(h)) => Box::new(h.iter()),
+            (Some(h), None) => Box::new(h.iter()),
+            (Some(h1), Some(h2)) => Box::new(h1.union(h2)),
+        }
+    }
+}
+
 impl<'a> EventsView<'a> {
     pub(super) fn iter_named_todos<'v>(&'v self) -> impl Iterator<Item = TodoWithContext<'a, 'v>> {
         self.named_todos.iter().flat_map(|(id, views)| {
@@ -379,7 +405,7 @@ impl<'a> EventsView<'a> {
         prompt: &EdgeCasesPrompt,
         todo_date: NaiveDate,
         path: Vec<String>,
-        tags: Option<HashSet<Tag>>,
+        heading_tags: Option<HashSet<Tag>>,
         todo: &'a Todo<'a>,
     ) -> Result<()> {
         let lock = todo.body();
@@ -389,6 +415,7 @@ impl<'a> EventsView<'a> {
             since,
             adhoc,
             title,
+            tags,
             ..
         }: &TodoBody = &lock;
 
@@ -413,6 +440,7 @@ impl<'a> EventsView<'a> {
             every,
             title,
             status,
+            tags,
             ..
         }: &TodoBody = &todo.body();
 
@@ -433,6 +461,16 @@ impl<'a> EventsView<'a> {
                     },
                 );
         }
+
+        let tags = match (heading_tags, tags) {
+            (Some(h), None) => Some(h),
+            (None, Some(h)) => Some(h.clone()),
+            (Some(mut h1), Some(h2)) => Some({
+                h1.extend(h2.iter().cloned());
+                h1
+            }),
+            (None, None) => None,
+        };
 
         self.dated_todos.entry(todo_date).or_default().push(todo);
         self.dated_declaration_contexts.insert(
