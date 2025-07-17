@@ -223,6 +223,8 @@ impl<'a, 'v> App<'a, 'v> {
                             }
                         }
                     }
+                    self.agenda_state
+                        .select_next(&self.dated_todos, &self.named_todos);
                 }
                 KeyEvent {
                     code: KeyCode::Char('c'),
@@ -232,6 +234,8 @@ impl<'a, 'v> App<'a, 'v> {
                     if let Some(todo) = self.get_selected_todo() {
                         todo.todo.toggle_completed();
                     }
+                    self.agenda_state
+                        .select_next(&self.dated_todos, &self.named_todos);
                 }
                 KeyEvent {
                     code: KeyCode::Char('g'),

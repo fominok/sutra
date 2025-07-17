@@ -549,6 +549,12 @@ impl<'a> Todo<'a> {
                     .prepend(new_todo_node);
             }
 
+            // If todo had several lines (nested list syntax) trying to preserve them:
+            for child in node.children().skip(1) {
+                child.detach();
+                new_todo_node.append(child);
+            }
+
             let desc = node.descendants().collect::<Vec<_>>();
             desc.into_iter().for_each(|d| d.detach());
             node.detach();

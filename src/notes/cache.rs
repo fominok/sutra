@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Result;
 use comrak::{Arena, nodes::AstNode};
-use tracing::{info, info_span};
+use tracing::{info, info_span, instrument};
 
 use super::{Todo, note::Note};
 use crate::{
@@ -72,6 +72,7 @@ impl<'a> NotesCache<'a> {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub(crate) fn get_note(&mut self, id: NoteIdentifier) -> Result<&'a RefCell<Note<'a>>> {
         match self.notes_index.entry(id) {
             Entry::Occupied(entry) => Ok(entry.into_mut()),

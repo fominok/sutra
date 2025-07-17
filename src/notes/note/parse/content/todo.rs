@@ -36,7 +36,7 @@ pub(super) fn parse_todo<'a>(node: &'a AstNode<'a>) -> Option<Todo<'a>> {
         let status = done.map(parse_status).unwrap_or_default();
 
         let (text, title) = parse_title(&text)
-            .inspect_err(|e| warn!("unable to parse todo title: {e}"))
+            .inspect_err(|e| warn!(?e, "unable to parse todo title"))
             .ok()?;
 
         let params = parse_params(text);
