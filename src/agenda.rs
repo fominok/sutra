@@ -6,9 +6,11 @@ use anyhow::Result;
 use comrak::Arena;
 pub(crate) use scroll::TodoWithContext;
 use scroll::{EdgeCasesPrompt, scroll_events};
+use tracing::instrument;
 
 use crate::{notes::NotesCache, ui, vault::Vault};
 
+#[instrument]
 pub(crate) fn agenda_screen(path: PathBuf) -> Result<()> {
     let vault = Vault::new(path);
     let md_arena = Arena::new();

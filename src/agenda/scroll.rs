@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Result, bail};
 use chrono::{Duration, Months, NaiveDate};
 use comrak::{Arena, nodes::AstNode};
+use tracing::{info, instrument};
 
 use super::NotesCache;
 use crate::{
@@ -314,6 +315,7 @@ impl<'a> EventsView<'a> {
             .filter(|(_, stats)| !stats.completed)
     }
 
+    #[instrument(skip(prompt, md_arena, recurrence_stats))]
     fn add_dated_todo_with_ongoing_recurrence(
         prompt: &EdgeCasesPrompt,
         md_arena: &'a Arena<AstNode<'a>>,
@@ -399,6 +401,7 @@ impl<'a> EventsView<'a> {
         Ok(())
     }
 
+    #[instrument(skip(self, prompt, cache, heading_tags))]
     fn add_dated_todo_without_ongoing_recurrence(
         &mut self,
         cache: &mut NotesCache<'a>,
@@ -415,7 +418,6 @@ impl<'a> EventsView<'a> {
             since,
             adhoc,
             title,
-            tags,
             ..
         }: &TodoBody = &lock;
 
@@ -534,6 +536,10 @@ impl<'a> EventsView<'a> {
                 while !completed && stats.times_ahead_left > 0 && &stats.next_date <= scroll_until {
                     let current_processing_date = stats.next_date;
 
+                    if current_processing_date > *TODAY {
+                        stats.times_ahead_left -= 1;
+                    }
+
                     // With the next date known a new todo entry is created
                     // unless it exists in the queue, if it
                     // comes early it shall use `advance` or `adhoc` params
@@ -617,10 +623,6 @@ impl<'a> EventsView<'a> {
                             (todo_date, todo)
                         }
                         _ => {
-                            if current_processing_date > *TODAY {
-                                stats.times_ahead_left -= 1;
-                            }
-
                             let note = cache.get_note(NoteIdentifier::new_dated(
                                 current_processing_date.into(),
                             ))?;
@@ -668,6 +670,13 @@ impl<'a> EventsView<'a> {
                         stats.next_date = add_interval(current_processing_date, &stats.every);
                     }
 
+                    info!(
+                        ?date,
+                        ?todo,
+                        times_ahead_left = ?stats.times_ahead_left,
+                        next_date = ?stats.next_date,
+                        "pushing dated todo"
+                    );
                     self.dated_todos.entry(date).or_default().push(todo);
                 }
             }
@@ -732,6 +741,7 @@ pub(super) fn scroll_events<'a, 'c>(
             }
         }
 
+        info!(?id, ?todos_views, "add named todos");
         view.named_todos.insert(id, todos_views);
     }
 
@@ -1093,14 +1103,14 @@ Some content
         assert_eq!(&*todo.title(), "do something");
         assert_eq!(todo.body().since, Some(start_date));
 
-        // Must be two additional todos
+        // Must be LOOK_AHEAD_TIMES additional todos
         assert_eq!(
             events_view
                 .dated_todos
                 .range(TODAY.succ_opt().expect("there must be tomorrow")..)
                 .filter_map(|(_, v)| v.get(0))
                 .count(),
-            2
+            LOOK_AHEAD_TIMES
         );
     }
 
