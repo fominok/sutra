@@ -443,6 +443,7 @@ impl TodoBody {
             adhoc,
             statements,
             status,
+            tags,
             ..
         }: &TodoBody = &self;
 
@@ -465,7 +466,11 @@ impl TodoBody {
                     .map(|x| format!("since {}", x.to_string())),
             )
             .chain(adhoc.then(|| "adhoc".to_owned()))
-            .chain(statements.iter().flatten().map(|x| x.to_string()));
+            .chain(statements.iter().flatten().map(|x| x.to_string()))
+            .chain(
+                tags.iter()
+                    .map(|ts| format!("tags {}", ts.iter().join(" "))),
+            );
 
         let params_body_str = params.join(", ");
 

@@ -10,7 +10,7 @@ use nom::{
     },
     character::complete::{multispace0, multispace1, u32},
     combinator::{map, map_res, opt},
-    multi::{many1, separated_list0},
+    multi::{many1, separated_list0, separated_list1},
     sequence::pair,
 };
 use tracing::warn;
@@ -146,7 +146,11 @@ fn parse_param(input: &str) -> IResult<&str, Param> {
         |(_, _, date)| Param::Since(date),
     ))
     .or(map(
-        (tag("tags"), multispace1, many1(parse_tag)),
+        (
+            tag("tags"),
+            multispace1,
+            separated_list1(multispace1, parse_tag),
+        ),
         |(_, _, tags)| Param::Tags(tags),
     ))
     .or(map(parse_statement, Param::Statement));
