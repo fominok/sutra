@@ -448,7 +448,7 @@ impl TodoBody {
 
         let mut params = every
             .into_iter()
-            .map(|x| x.to_string())
+            .map(|x| format!("every {}", x.to_string()))
             .chain(
                 delay
                     .into_iter()

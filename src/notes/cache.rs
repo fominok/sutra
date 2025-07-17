@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::Result;
 use comrak::{Arena, nodes::AstNode};
+use tracing::{info, info_span};
 
 use super::{Todo, note::Note};
 use crate::{
@@ -47,7 +48,25 @@ impl<'a> NotesCache<'a> {
 
     pub(crate) fn persist_notes(&self) -> Result<()> {
         for (id, note) in self.notes_index.iter() {
-            self.vault.write(id, &note.borrow().as_bytes())?;
+            let span = info_span!("persisting note", ?id);
+            let _guard = span.enter();
+
+            let note_ref = note.borrow();
+            let mut content_iter = note_ref.content_traverse();
+
+            while let Some(content) = content_iter.next().map(|c| c.3) {
+                for todo in content
+                    .iter()
+                    .filter_map(|c| TryInto::<&[&Todo]>::try_into(c).ok())
+                    .flatten()
+                {
+                    let title = todo.title();
+                    info!(?title, "updating todo AST");
+                    todo.update_ast(&self.md_arena);
+                }
+            }
+
+            self.vault.write(id, &note_ref.as_bytes())?;
         }
 
         Ok(())
